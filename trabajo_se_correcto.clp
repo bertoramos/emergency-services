@@ -15,6 +15,7 @@
   (/ ?x ?exp)
 )
 
+
 ; templates
 (deftemplate Service
   (slot id (type INTEGER)) ; identificador del servicio
@@ -38,42 +39,50 @@
   (slot id_emergency (type INTEGER))
   (slot name_emergency (allowed-values natural_disaster thief homicide pandemic car_crash))
   (slot id_service (type INTEGER)) ; -1 id code_error is <0
-  (multislot name_service (allowed-values Sanitary Firemen Policemen))
+  (slot name_service (allowed-values Sanitary Firemen Policemen))
+  (slot required (type INTEGER))
 )
-; (choose-service ?id ?type ?n_affected ?loc_X ?loc_Y ?e)
-(deftemplate choose-service
-  (slot id (type INTEGER))
-  (slot type (allowed-values natural_disaster thief homicide pandemic car_crash))
-  (slot n_affected (type INTEGER))
-  (slot x (type FLOAT))
-  (slot y (type FLOAT))
-  (slot e)
+; error code:
+;   >= 0 -> success
+;   -1 -> not enough members
+
+; Contar el número de miembros total de un servicio
+(deffunction count_members(?service_name)
+  (bind ?count 0)
+  (do-for-all-facts ((?service Service)) TRUE
+    (if (eq ?service:name ?service_name)
+     then
+      (bind ?count (+ ?count ?service:n_members))
+    )
+  )
+  (return ?count)
 )
+
 
 (deffacts example_thief
 
   (Service
     (id 1)
     (name Sanitary)
-    (location  0.0 0.0)
+    (location  3.0 4.0)
     (n_members 100)
     (movement_speed 2.0)
     (prep_time 0.3)
   )
 
   (Service
-    (id 1)
+    (id 2)
     (name Firemen)
-    (location  0.0 0.0)
+    (location  5.0 6.0)
     (n_members 100)
     (movement_speed 2.0)
     (prep_time 0.3)
   )
 
   (Service
-    (id 1)
+    (id 3)
     (name Policemen)
-    (location  0.0 0.0)
+    (location  7.0 8.0)
     (n_members 1)
     (movement_speed 2.0)
     (prep_time 0.3)
@@ -88,24 +97,12 @@
 
 )
 
-; error code:
-;   >= 0 -> success
-;   -1 -> not enough members
-
 (defrule notifyExistenceService
-  (Service (name ?name) (id ?id) (location ?loc_X ?loc_Y))
+  (declare (salience 99))
+  (Service (name ?name) (location ?loc_X ?loc_Y))
   =>
   (printout t "Service " ?name " situated at (" ?loc_X " " ?loc_Y ") ready!" crlf)
-  (do-for-all-facts ((?ch choose-service)) TRUE
-    (bind ?id ?ch:id)
-    (bind ?type ?ch:type)
-    (bind ?n_affected ?ch:n_affected)
-    (bind ?x ?ch:x)
-    (bind ?y ?ch:y)
-    (bind ?e ?ch:e)
-    (retract ?ch)
-    (assert (choose-service (id ?id) (type ?type) (n_affected ?n_affected) (x ?x) (y ?y) (e ?e)))
-  )
+
 )
 
 (defrule emergencySpotted
@@ -113,48 +110,27 @@
   =>
   (printout t "A emergency appeared!" crlf)
   (assert
-    (choose-service (id ?id) (type ?type) (n_affected ?n_affected) (x ?loc_X) (y ?loc_Y) (e ?e))
+    (choose-service ?id ?type ?n_affected ?loc_X ?loc_Y)
   )
-)
-
-; Contar el número de miembros total de un servicio
-(deffunction count_members(?service_name)
-  (bind ?count 0)
-  (do-for-all-facts ((?service Service)) TRUE
-    (if (eq ?service:name ?service_name)
-     then
-      (bind ?count (+ ?count ?service:n_members))
-    )
-  )
-  (return ?count)
 )
 
 ; Emergency type handler
 (defrule is-thief
-  ?serv <- (choose-service (id ?id) (type ?type) (n_affected ?n_affected) (x ?x) (y ?y) (e ?em))
+  ?serv <- (choose-service ?id ?type ?n_affected ?x ?y)
   (test (eq ?type thief))
-  (test (>= (count_members Policemen) (ceil (/ ?n_affected 10)) ))
   =>
   (printout t "Is a thief emergency" crlf)
 
   ; calculate required staff: 1 member/10 people
   (bind ?staff_policemen (ceil (/ ?n_affected 10)))
-  (bind ?num_policemen (count_members Policemen))
 
+  (bind ?num_policemen (count_members Policemen))
   (if (>= ?num_policemen ?staff_policemen)
    then
     (assert (call Policemen ?id ?x ?y ?staff_policemen))
    else
     (printout t "ERROR: there are not enough policemen to attend to the emergency " ?id " : " (- ?num_policemen ?staff_policemen) crlf)
-    (assert (Solution (id_solution (integer (* 1000 (time)))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Policemen)))
-
-    (retract ?em)
-    (assert (Emergency
-      (id ?id)
-      (type thief)
-      (location ?x ?y)
-      (n_affected_people ?n_affected)
-    ))
+    (assert (Solution (id_solution (integer (* 1000 (time)))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Policemen) (required ?staff_policemen)))
   )
 
   ; delete choose-service
@@ -162,11 +138,8 @@
 )
 
 (defrule is-natural_disaster
-  ?serv <- (choose-service (id ?id) (type ?type) (n_affected ?n_affected) (x ?x) (y ?y) (e ?em))
+  ?serv <- (choose-service ?id ?type ?n_affected ?x ?y)
   (test (eq ?type natural_disaster))
-  (test (>= (count_members Policemen) (ceil (/ ?n_affected 10)) ))
-  (test (>= (count_members Firemen) (ceil (/ ?n_affected 10)) ))
-  (test (>= (count_members Sanitary) (ceil (/ ?n_affected 10)) ))
   =>
   (printout t "Is a natural disaster emergency" crlf)
   ; calculate required staff: 1 member/10 people
@@ -178,22 +151,26 @@
   (bind ?num_sanitary (count_members Sanitary))
   (bind ?num_firemen (count_members Firemen))
 
-  (if (and (>= ?num_policemen ?staff_policemen) (>= ?num_sanitary ?staff_sanitary) (>= ?num_firemen ?staff_firemen))
+  (if (>= ?num_policemen ?staff_policemen)
    then
     (assert (call Policemen ?id ?x ?y ?staff_policemen))
+   else
+    (printout t "ERROR: there are not enough policemen to attend to the emergency " ?id " : " (- ?num_policemen ?staff_policemen) crlf)
+    (assert (Solution (id_solution (integer (* 1000 (time)))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Policemen) (required ?staff_policemen)))
+  )
+  (if (>= ?num_sanitary ?staff_sanitary)
+   then
     (assert (call Sanitary ?id ?x ?y ?staff_sanitary))
+   else
+    (printout t "ERROR: there are not enough sanitary to attend to the emergency " ?id " : " (- ?num_sanitary ?staff_sanitary) crlf)
+    (assert (Solution (id_solution (integer (* 1000 (time)))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Sanitary) (required ?staff_sanitary)))
+  )
+  (if (>= ?num_firemen ?staff_firemen)
+   then
     (assert (call Firemen ?id ?x ?y ?staff_firemen))
    else
-    (printout t "ERROR: there are not enough policemen, sanitary or firemen to attend to the emergency " ?id " : " (- ?num_policemen ?staff_policemen) crlf)
-    (assert (Solution (id_solution (integer (* 1000 (time)))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Policemen Sanitary Firemen)))
-
-    (retract ?em)
-    (assert (Emergency
-      (id ?id)
-      (type natural_disaster)
-      (location ?x ?y)
-      (n_affected_people ?n_affected)
-    ))
+    (printout t "ERROR: there are not enough firemen to attend to the emergency " ?id " : " (- ?num_firemen ?staff_firemen) crlf)
+    (assert (Solution (id_solution (integer (* 1000 (time)))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Firemen) (required ?staff_firemen)))
   )
 
   ; delete choose-service
@@ -201,10 +178,8 @@
 )
 
 (defrule is-homicide
-  ?serv <- (choose-service (id ?id) (type ?type) (n_affected ?n_affected) (x ?x) (y ?y) (e ?em))
+  ?serv <- (choose-service ?id ?type ?n_affected ?x ?y)
   (test (eq ?type homicide))
-  (test (>= (count_members Policemen) (ceil (/ ?n_affected 10)) ))
-  (test (>= (count_members Sanitary) (ceil (/ ?n_affected 10)) ))
   =>
   (printout t "Is a homicide emergency" crlf)
   ; calculate required staff: 1 member/10 people
@@ -214,30 +189,27 @@
   (bind ?num_policemen (count_members Policemen))
   (bind ?num_sanitary (count_members Sanitary))
 
-  (if (and (>= ?num_policemen ?staff_policemen) (>= ?num_sanitary ?staff_sanitary))
+  (if (>= ?num_policemen ?staff_policemen)
    then
     (assert (call Policemen ?id ?x ?y ?staff_policemen))
+   else
+    (printout t "ERROR: there are not enough policemen to attend to the emergency " ?id " : " (- ?num_policemen ?staff_policemen) crlf)
+    (assert (Solution (id_solution (integer (time))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Policemen) (required ?staff_policemen)))
+  )
+  (if (>= ?num_sanitary ?staff_sanitary)
+   then
     (assert (call Sanitary ?id ?x ?y ?staff_sanitary))
    else
-    (printout t "ERROR: there are not enough policemen or sanitary to attend to the emergency " ?id " : " (- ?num_policemen ?staff_policemen) crlf)
-    (assert (Solution (id_solution (integer (time))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Policemen Sanitary)))
-
-    (retract ?em)
-    (assert (Emergency
-      (id ?id)
-      (type homicide)
-      (location ?x ?y)
-      (n_affected_people ?n_affected)
-    ))
+    (printout t "ERROR: there are not enough sanitary to attend to the emergency " ?id  " : " (- ?num_sanitary ?staff_sanitary) crlf)
+    (assert (Solution (id_solution (integer (time))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Sanitary) (required ?staff_sanitary)))
   )
   ; delete choose-service
   (retract ?serv)
 )
 
 (defrule is-pandemic
-  ?serv <- (choose-service (id ?id) (type ?type) (n_affected ?n_affected) (x ?x) (y ?y) (e ?em))
+  ?serv <- (choose-service ?id ?type ?n_affected ?x ?y)
   (test (eq ?type pandemic))
-  (test (>= (count_members Sanitary) (ceil (/ ?n_affected 10)) ))
   =>
   (printout t "Is a pandemic emergency" crlf)
   ; calculate required staff: 1 member/10 people
@@ -250,25 +222,15 @@
     (assert (call Sanitary ?id ?x ?y ?staff_sanitary))
    else
     (printout t "ERROR: there are not enough sanitary to attend to the emergency " ?id " : " (- ?num_sanitary ?staff_sanitary) crlf)
-    (assert (Solution (id_solution (integer (* 1000 (time)))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Sanitary)))
-
-    (retract ?em)
-    (assert (Emergency
-      (id ?id)
-      (type pandemic)
-      (location ?x ?y)
-      (n_affected_people ?n_affected)
-    ))
+    (assert (Solution (id_solution (integer (* 1000 (time)))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Sanitary) (required ?staff_sanitary)))
   )
   ; delete choose-service
   (retract ?serv)
 )
 
 (defrule is-car-crash
-  ?serv <- (choose-service (id ?id) (type ?type) (n_affected ?n_affected) (x ?x) (y ?y) (e ?em))
+  ?serv <- (choose-service ?id ?type ?n_affected ?x ?y)
   (test (eq ?type car_crash))
-  (test (>= (count_members Policemen) (ceil (/ ?n_affected 10)) ))
-  (test (>= (count_members Firemen) (ceil (/ ?n_affected 10)) ))
   =>
   (printout t "Is a car crash emergency" crlf)
 
@@ -279,21 +241,20 @@
   (bind ?num_policemen (count_members Policemen))
   (bind ?num_firemen (count_members Firemen))
 
-  (if (and (>= ?num_policemen ?staff_policemen) (>= ?num_firemen ?staff_firemen))
+
+  (if (>= ?num_policemen ?staff_policemen)
    then
     (assert (call Policemen ?id ?x ?y ?staff_policemen))
+   else
+    (printout t "ERROR: there are not enough policemen to attend to the emergency " ?id " : " (- ?num_policemen ?staff_policemen) crlf)
+    (assert (Solution (id_solution (integer (* 1000 (time)))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Policemen) (required ?staff_policemen)))
+  )
+  (if (>= ?num_firemen ?staff_firemen)
+   then
     (assert (call Firemen ?id ?x ?y ?staff_firemen))
    else
-    (printout t "ERROR: there are not enough policemen or firemen and to attend to the emergency " ?id " : " (- ?num_policemen ?staff_policemen) crlf)
-    (assert (Solution (id_solution (integer (* 1000 (time)))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Policemen Firemen)))
-
-    (retract ?em)
-    (assert (Emergency
-      (id ?id)
-      (type car_crash)
-      (location ?x ?y)
-      (n_affected_people ?n_affected)
-    ))
+    (printout t "ERROR: there are not enough firemen to attend to the emergency " ?id " : " (- ?num_firemen ?staff_firemen)  crlf)
+    (assert (Solution (id_solution (integer (* 1000 (time)))) (code_error -1) (id_emergency ?id) (name_emergency ?type) (id_service -1) (name_service Firemen) (required ?staff_firemen)))
   )
 
   ; retract choose-service
@@ -389,6 +350,25 @@
       )
     )
     (assert (Solution (id_solution (integer (* 1000 (time)))) (code_error 0) (id_emergency ?emergency_id) (name_emergency ?emergency_type) (id_service ?service_id) (name_service ?service_name)))
+  )
+)
+
+(defrule solve-solution
+  ?sol <- (Solution (id_solution ?id_sol) (code_error ?code) (id_emergency ?id_em) (name_emergency ?name_em) (id_service ?id_serv) (name_service ?name_serv) (required ?req))
+  ?serv <- (Service (id ?id_service))
+  (test (< ?code 0))
+  (test (>= (count_members ?name_serv) ?req) )
+  =>
+  (printout t "Entro en solve-solution" crlf)
+  (do-for-all-facts ((?emergency Emergency)) TRUE
+    (if (eq ?emergency:id ?id_em)
+     then
+      (bind ?locx (nth$ 1 (fact-slot-value ?emergency location)))
+      (bind ?locy (nth$ 2 (fact-slot-value ?emergency location)))
+      (assert (call ?name_serv ?id_em ?locx ?locy ?req))
+      (retract ?sol)
+      (break)
+    )
   )
 )
 
