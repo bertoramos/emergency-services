@@ -359,7 +359,6 @@
   (test (< ?code 0))
   (test (>= (count_members ?name_serv) ?req) )
   =>
-  (printout t "Entro en solve-solution" crlf)
   (do-for-all-facts ((?emergency Emergency)) TRUE
     (if (eq ?emergency:id ?id_em)
      then
